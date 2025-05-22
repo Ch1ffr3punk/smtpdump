@@ -24,8 +24,8 @@ const (
 	ReadTimeout          = 60 * time.Second
 	WriteTimeout         = 60 * time.Second
 	InputLimit           = 1024 * 1024
-	MailQueueBufferSize  = 100 // How many mails can be buffered
-	FileSaverWorkerCount = 5   // How many concurrent goroutines save files
+	MailQueueBufferSize  = 100
+	FileSaverWorkerCount = 5
 )
 
 var (
@@ -44,11 +44,9 @@ var (
 	writePrintf = color.New(color.FgCyan).Printf
 	hostname    string
 
-	// Global channel for queuing emails to be saved
 	mailSaverQueue chan *mailDataToSave
 )
 
-// mailDataToSave struct holds necessary data for saving an email
 type mailDataToSave struct {
 	RemoteAddr net.Addr
 	From       string
@@ -92,17 +90,14 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	// Initialize the mail queue as a bidirectional channel
 	mailSaverQueue = make(chan *mailDataToSave, MailQueueBufferSize)
 
-	// Start the background workers for saving emails
 	startFileSaverWorkers(mailSaverQueue, FileSaverWorkerCount, *output, *extension, *verbose)
 
 	var handler smtpd.Handler
 	if *discard {
 		handler = discardHandler(*verbose)
 	} else {
-		// Use the new queuing handler
 		handler = queuingOutputHandler(mailSaverQueue, *verbose)
 	}
 
@@ -110,7 +105,7 @@ func main() {
 		Addr:        *addr,
 		Appname:     "SMTPDump",
 		AuthHandler: authHandler,
-		Handler:     handler, // This is now the queuing handler
+		Handler:     handler,
 		MaxSize:     InputLimit,
 		LogRead: func(_, _, line string) {
 			line = strings.Replace(line, "\n", "\n  ", -1)
@@ -186,9 +181,6 @@ func discardHandler(verbose bool) smtpd.Handler {
 	}
 }
 
-// queuingOutputHandler queues the email for asynchronous saving
-// It now receives a send-only channel `chan<-` which is appropriate
-// for the handler's role of only sending data *into* the queue.
 func queuingOutputHandler(queue chan<- *mailDataToSave, verbose bool) smtpd.Handler {
 	return func(origin net.Addr, from string, to []string, data []byte) error {
 		mailToSave := &mailDataToSave{
@@ -210,17 +202,14 @@ func queuingOutputHandler(queue chan<- *mailDataToSave, verbose bool) smtpd.Hand
 				}
 				log.Printf("INFO: Mail from %q to %q with subject %q queued for saving.\n", from, to, subject)
 			}
-			return nil // Return success immediately to the client
+			return nil
 		default:
 			log.Printf("WARNING: Mail queue is full, could not queue mail from %q to %q. Consider increasing MailQueueBufferSize.\n", from, to)
-			// Returning a generic error here as smtpd.Error is not available.
-			// This will likely result in a 554 Transaction failed response from the smtpd library.
 			return errors.New("Server queue full, please try again later (internal error)")
 		}
 	}
 }
 
-// saveMailToFile performs the actual file saving operation
 func saveMailToFile(data *mailDataToSave, outputDir, ext string, verbose bool) error {
 	fileName, err := generateFileName(outputDir, "", data.Data, ext)
 	if err != nil {
@@ -247,9 +236,6 @@ func saveMailToFile(data *mailDataToSave, outputDir, ext string, verbose bool) e
 	return nil
 }
 
-// startFileSaverWorkers initializes background goroutines to save emails from the queue.
-// The 'queue' parameter is a bidirectional channel 'chan *mailDataToSave'
-// to allow re-queueing messages if saving fails.
 func startFileSaverWorkers(queue chan *mailDataToSave, workerCount int, outputDir, ext string, verbose bool) {
 	for i := 0; i < workerCount; i++ {
 		go func(workerID int) {
@@ -259,13 +245,12 @@ func startFileSaverWorkers(queue chan *mailDataToSave, workerCount int, outputDi
 				if err != nil {
 					log.Printf("File Saver Worker %d: Failed to save mail from %q (Retry %d): %v\n", workerID, mailToSave.From, mailToSave.RetryCount, err)
 					
-					if mailToSave.RetryCount < 3 { // Example: Max 3 retries
+					if mailToSave.RetryCount < 3 {
 						mailToSave.RetryCount++
-						// Re-queue with a delay. Use a new goroutine to avoid blocking the worker.
 						go func(m *mailDataToSave) {
 							time.Sleep(5 * time.Second * time.Duration(m.RetryCount))
 							select {
-							case queue <- m: // Now able to send back into the queue
+							case queue <- m:
 								log.Printf("File Saver Worker %d: Re-queued mail from %q for retry %d.\n", workerID, m.From, m.RetryCount)
 							default:
 								log.Printf("File Saver Worker %d: Failed to re-queue mail from %q, queue full. Dropped after %d retries.\n", workerID, m.From, m.RetryCount-1)
@@ -293,10 +278,28 @@ func generateFileName(dir, from string, data []byte, ext string) (string, error)
 		}
 	}
 	
-	fileName := fmt.Sprintf("%s.%s", subject, ext)
+	baseFileName := subject 
 	
-	return filepath.Join(dir, fileName), nil
+	fullPath := filepath.Join(dir, baseFileName + "." + ext)
+	
+	counter := 0
+	for {
+		_, err := os.Stat(fullPath)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("Error when checking the file path %q: %w", fullPath, err)
+		}
+
+		counter++
+		newFileName := fmt.Sprintf("%s_%d.%s", baseFileName, counter, ext) 
+		fullPath = filepath.Join(dir, newFileName)
+	}
+
+	return fullPath, nil
 }
+
 func sanitizeFileName(input string) string {
 	invalid := []string{"/", "\\", "?", "%", "*", ":", "|", "\"", "<", ">", " "}
 	result := input
