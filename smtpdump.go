@@ -222,7 +222,7 @@ func queuingOutputHandler(queue chan<- *mailDataToSave, verbose bool) smtpd.Hand
 
 // saveMailToFile performs the actual file saving operation
 func saveMailToFile(data *mailDataToSave, outputDir, ext string, verbose bool) error {
-	fileName, err := generateFileName(outputDir, data.From, data.Data, ext)
+	fileName, err := generateFileName(outputDir, "", data.Data, ext)
 	if err != nil {
 		log.Printf("Error generating filename for mail from %q: %v\n", data.From, err)
 		return err
@@ -284,19 +284,19 @@ func startFileSaverWorkers(queue chan *mailDataToSave, workerCount int, outputDi
 }
 
 func generateFileName(dir, from string, data []byte, ext string) (string, error) {
-	msg, _ := mail.ReadMessage(bytes.NewReader(data))
+	msg, err := mail.ReadMessage(bytes.NewReader(data))
 	subject := "no_subject"
-	if msg != nil && msg.Header.Get("Subject") != "" {
-		subject = sanitizeFileName(msg.Header.Get("Subject"))
+
+	if err == nil {
+		if s := msg.Header.Get("Subject"); s != "" {
+			subject = sanitizeFileName(s)
+		}
 	}
 	
-	timestamp := time.Now().Format("20060102_150405")
-	fromAddr := sanitizeFileName(from)
+	fileName := fmt.Sprintf("%s.%s", subject, ext)
 	
-	fileName := fmt.Sprintf("%s_%s_%s.%s", timestamp, fromAddr, subject, ext)
 	return filepath.Join(dir, fileName), nil
 }
-
 func sanitizeFileName(input string) string {
 	invalid := []string{"/", "\\", "?", "%", "*", ":", "|", "\"", "<", ">", " "}
 	result := input
