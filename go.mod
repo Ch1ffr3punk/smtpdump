@@ -1,11 +1,11 @@
 module smtpdump
 
-go 1.24.2
+go 1.24.4
 
 require (
 	github.com/fatih/color v1.18.0
 	github.com/mhale/smtpd v0.8.3
-	golang.org/x/time v0.11.0
+	golang.org/x/time v0.12.0
 )
 
 require (

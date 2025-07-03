@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -26,6 +27,7 @@ const (
 	InputLimit           = 1024 * 1024
 	MailQueueBufferSize  = 100
 	FileSaverWorkerCount = 5
+	RandomNameLength     = 8
 )
 
 var (
@@ -211,7 +213,7 @@ func queuingOutputHandler(queue chan<- *mailDataToSave, verbose bool) smtpd.Hand
 }
 
 func saveMailToFile(data *mailDataToSave, outputDir, ext string, verbose bool) error {
-	fileName, err := generateFileName(outputDir, "", data.Data, ext)
+	fileName, err := generateRandomFileName(outputDir, ext)
 	if err != nil {
 		log.Printf("Error generating filename for mail from %q: %v\n", data.From, err)
 		return err
@@ -268,46 +270,21 @@ func startFileSaverWorkers(queue chan *mailDataToSave, workerCount int, outputDi
 	}
 }
 
-func generateFileName(dir, from string, data []byte, ext string) (string, error) {
-	msg, err := mail.ReadMessage(bytes.NewReader(data))
-	subject := "no_subject"
-
-	if err == nil {
-		if s := msg.Header.Get("Subject"); s != "" {
-			subject = sanitizeFileName(s)
-		}
+func generateRandomFileName(dir, ext string) (string, error) {
+	const letters = "0123456789abcdefghijklmnopqrstuvwxyz"
+	bytes := make([]byte, RandomNameLength)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("could not generate random filename: %w", err)
 	}
-	
-	baseFileName := subject 
-	
-	fullPath := filepath.Join(dir, baseFileName + "." + ext)
-	
-	counter := 0
-	for {
-		_, err := os.Stat(fullPath)
-		if os.IsNotExist(err) {
-			break
-		}
-		if err != nil {
-			return "", fmt.Errorf("Error when checking the file path %q: %w", fullPath, err)
-		}
 
-		counter++
-		newFileName := fmt.Sprintf("%s_%d.%s", baseFileName, counter, ext) 
-		fullPath = filepath.Join(dir, newFileName)
+	for i, b := range bytes {
+		bytes[i] = letters[b%byte(len(letters))]
 	}
+
+	fileName := string(bytes) + "." + ext
+	fullPath := filepath.Join(dir, fileName)
 
 	return fullPath, nil
-}
-
-func sanitizeFileName(input string) string {
-	invalid := []string{"/", "\\", "?", "%", "*", ":", "|", "\"", "<", ">", " "}
-	result := input
-	for _, char := range invalid {
-		result = strings.ReplaceAll(result, char, "_")
-	}
-	result = strings.ReplaceAll(result, ".", "_")
-	return result
 }
 
 func rcptHandler(_ net.Addr, from string, to string) bool {
